@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="transfer.data">
+    <resultMap id="syncData" type="com.spring.stockAnalyzer.application.data.SyncData">
+        <id column="syncId" property="id" />
+        <result column="startTime" property="startTime" />
+        <result column="endTime" property="endTime" />
+        <result column="isSuccessful" property="isSuccessful" />
+        <collection property="stockPrices" javaType="list" ofType="com.spring.stockAnalyzer.application.data.StockPriceData">
+            <id column="stockPriceId" property="id"/>
+            <result column="stockId" property="stockId" />
+            <result column="stockName" property="stockName" />
+            <result column="price" property="price" />
+            <result column="MA20" property="MA20" />
+            <result column="MA30" property="MA30"/>
+            <result column="MA60" property="MA60" />
+            <result column="MA120" property="MA120" />
+            <result column="syncId" property="syncId" />
+        </collection>
+    </resultMap>
+</mapper>

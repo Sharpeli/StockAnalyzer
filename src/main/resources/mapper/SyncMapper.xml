@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.spring.stockAnalyzer.infrastructure.mybatis.mapper.SyncMapper">
+    <insert id="insert">
+        insert into syncs(id, start_time, end_time, is_successful)
+        values(
+                  #{sync.id},
+                  #{sync.startTime},
+                  #{sync.endTime},
+                  #{sync.isSuccessful})
+    </insert>
+    <update id="update">
+        update syncs
+            <set>
+                end_time = #{endTime},
+                is_successful = #{isSuccessful}
+            </set>
+        where id = #{id}
+    </update>
+</mapper>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.spring.stockAnalyzer.infrastructure.mybatis.readService.SyncReadService">
+    <select id="getLatestSuccessfulSync" resultMap="transfer.data.syncData">
+        select
+        sync.id syncId,
+        sync.start_time startTime,
+        sync.end_time endTime,
+        sync.is_successful isSuccessful,
+        stockPrice.id stockPriceId,
+        stockPrice.price price,
+        stockPrice.MA_20 MA20,
+        stockPrice.MA_30 MA30,
+        stockPrice.MA_60 MA60,
+        stockPrice.MA_120 MA120,
+        stock.id stockId,
+        stock.name stockName
+        from syncs sync
+        join stock_prices stockPrice on sync.id = stockPrice.sync_id
+        join stocks stock on stockPrice.stock_id = stock.id
+        where sync.end_time = (select max(sync2.end_time)
+            from syncs sync2)
+    </select>
+</mapper>
