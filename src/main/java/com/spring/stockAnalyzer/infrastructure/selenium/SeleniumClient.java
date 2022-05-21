@@ -21,7 +21,7 @@ public class SeleniumClient {
         logger.info("chrome driver set up successfully.");
     }
 
-    public <TResult> TResult triggerSelenium(Function<WebDriver, TResult> action) {
+    public <TResult> TResult triggerNewWebDriver(Function<WebDriver, TResult> action) {
         WebDriver webDriver = getWebDriver();
         try {
             return action.apply(webDriver);
@@ -29,6 +29,7 @@ public class SeleniumClient {
             throw ex;
         } finally {
             webDriver.close();
+            webDriver.quit();
         }
     }
 

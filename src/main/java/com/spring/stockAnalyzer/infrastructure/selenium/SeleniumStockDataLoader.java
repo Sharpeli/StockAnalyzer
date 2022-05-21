@@ -1,30 +1,24 @@
 package com.spring.stockAnalyzer.infrastructure.selenium;
 
-import com.evanlennick.retry4j.CallExecutorBuilder;
-import com.evanlennick.retry4j.Status;
-import com.evanlennick.retry4j.config.RetryConfig;
-import com.evanlennick.retry4j.config.RetryConfigBuilder;
 import com.spring.stockAnalyzer.application.data.StockData;
 import com.spring.stockAnalyzer.core.stock.Stock;
 import com.spring.stockAnalyzer.core.stock.StockDataLoader;
 import com.spring.stockAnalyzer.core.stockprice.StockPrice;
 import com.spring.stockAnalyzer.infrastructure.EnvironmentVariableDecoder;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
-import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.chrome.ChromeOptions;
-
-import java.util.*;
-import java.util.concurrent.Callable;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.springframework.stereotype.Component;
 
-import static java.time.temporal.ChronoUnit.SECONDS;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
+import static com.spring.stockAnalyzer.infrastructure.RetryUtils.retry5timesWith2SecondsDelay;
 
 @Component
 public class SeleniumStockDataLoader implements StockDataLoader {
@@ -39,12 +33,17 @@ public class SeleniumStockDataLoader implements StockDataLoader {
 
     @Override
     public Set<Stock> getStocks(String[] categories) {
-        return seleniumClient.triggerSelenium( webDriver -> getStocks(webDriver, categories));
+        Set<Stock> stocks =  Arrays.stream(categories).parallel().map(category ->
+                seleniumClient.triggerNewWebDriver(webDriver -> getStocks(webDriver, category)))
+                    .flatMap(Collection::stream).collect(Collectors.toSet());
+        logger.info(String.format("一共获得%d只股票", stocks.size()));
+
+        return stocks;
     }
 
     @Override
     public Optional<StockPrice> getStockPrice(String stockId) {
-        return seleniumClient.triggerSelenium(webDriver -> {
+        return seleniumClient.triggerNewWebDriver(webDriver -> {
             StockPrice stockPrice = getStockPrice(stockId, webDriver, true);
             return Optional.of(stockPrice);
         });
@@ -52,59 +51,69 @@ public class SeleniumStockDataLoader implements StockDataLoader {
 
     @Override
     public List<StockData> getStockWithPrices(String[] categories) {
-        return seleniumClient.triggerSelenium(webDriver -> {
-            Set<Stock> stocks = getStocks(webDriver, categories);
+        Set<Stock> stocks = getStocks(categories);
+        int chromeDriverCount = Integer.parseInt(environment.getProperty("app.max-parallel-chrome-drivers-count"));
+        List<List<Stock>> stockBuckets = new ArrayList<>(chromeDriverCount);
+        for(int i = 0; i < chromeDriverCount; i++) {
+            stockBuckets.add(new LinkedList<>());
+        }
+        int i = 0;
+        for(Stock stock: stocks) {
+            stockBuckets.get(i).add(stock);
+            i = (i + 1) % chromeDriverCount;
+        }
+        AtomicInteger webDriverNumber = new AtomicInteger(0);
+        AtomicInteger totalNumber = new AtomicInteger(0);
+        List<String> skippedStockIds = Collections.synchronizedList(new LinkedList<>());
+        List<StockData> result = stockBuckets.stream().parallel().map(stocksInEachBucket -> seleniumClient.triggerNewWebDriver(webDriver -> {
+            int currentWebDriverNo = webDriverNumber.addAndGet(1);
             List<StockData> stockDataList = new LinkedList<>();
-            List<String> skippedStockIds = new LinkedList<>();
             boolean needAdjustMaOptions = true;
             int index = 0;
-            for(Stock stock: stocks) {
+            for(Stock stock: stocksInEachBucket) {
+                int currentTotalNum = totalNumber.addAndGet(1);
                 try {
-                    logger.info(String.format("%d: 开始读取股票%s价格", ++index, stock.getId()));
+                    logger.info(String.format("Total No: %d, Web Driver-%d, Internal No: %d: 开始读取股票%s价格",
+                            currentTotalNum, currentWebDriverNo,  ++index, stock.getId()));
                     StockPrice price = getStockPrice(stock.getId(), webDriver, needAdjustMaOptions);
                     stockDataList.add(new StockData(stock, price));
                     needAdjustMaOptions = false;
                 }catch(Exception ex) {
-                    logger.info(String.format("%d: 读取股票%s价格出现错误,已忽略", index, stock.getId()));
-                    skippedStockIds.add(stock.getId());
+                    logger.info(String.format("Total No: %d, Web Driver-%d, Internal No: %d: 读取股票%s价格出现错误,已忽略",
+                            currentTotalNum, currentWebDriverNo, index, stock.getId()));
+                    synchronized (skippedStockIds) {
+                        skippedStockIds.add(stock.getId());
+                    }
                 }
             }
 
-            logger.info(String.format("完成股票价格读取, 已忽略%d条数据, 他们的股票代码分别是%s", skippedStockIds.size(), skippedStockIds));
-
             return stockDataList;
-        });
+        })).flatMap(Collection::stream).collect(Collectors.toList());
+
+        logger.info(String.format("完成股票价格读取, 已忽略%d条数据, 他们的股票代码分别是%s", skippedStockIds.size(), skippedStockIds));
+
+        return result;
     }
 
-    private Set<Stock> getStocks(WebDriver webDriver, String[] categories) {
+    private Set<Stock> getStocks(WebDriver webDriver, String category) {
         String uri = environment.getProperty("app.stock-list-url");
         webDriver.get(uri);
-        if(categories.length == 0) {
-            categories = environment.getProperty("app.stock-categories").split(",");
-        }
-
-        Set<Stock> stocks = new HashSet<>();
-        for(String category: categories) {
-            stocks.addAll(getStockListByCategory(webDriver, category));
-        }
-
-        return stocks;
+        return getStockListByCategory(webDriver, category);
     }
 
     private Set<Stock> getStockListByCategory(@NotNull WebDriver webDriver, String category) {
         logger.info(String.format("开始从%s读取股票列表", category));
 
         WebElement categoryLink = webDriver.findElement(By.xpath(String.format("//div[@id='tab']/ul/li/a[contains(text(), '%s')]", category)));
-        String link = categoryLink.getAttribute("href");
-        String baseLink = environment.getProperty("app.stock-list-url");
+        String link = categoryLink.getAttribute("href");;
         webDriver.get(link);
 
         int page = 1;
         logger.info(String.format("开始从%s读取股票列表第%d页", category, page++));
         Set<Stock> stocks = getStockListFromTable(webDriver);
 
-        while( retry(() -> !webDriver.findElement(By.xpath("//a[contains(text(), '下一页')]")).getAttribute("class").contains("disabled"))) {
-            retry (() -> {
+        while( retry5timesWith2SecondsDelay(() -> !webDriver.findElement(By.xpath("//a[contains(text(), '下一页')]")).getAttribute("class").contains("disabled"))) {
+            retry5timesWith2SecondsDelay(() -> {
                 webDriver.findElement(By.xpath("//a[contains(text(), '下一页')]")).click();
                 return null;
             });
@@ -112,13 +121,13 @@ public class SeleniumStockDataLoader implements StockDataLoader {
             stocks.addAll(getStockListFromTable(webDriver));
         }
 
-        logger.info(String.format("从%s获得%d条数据", category, stocks.size()));
+        logger.info(String.format("从%s获得%d条股票数据", category, stocks.size()));
 
         return stocks;
     }
 
     private Set<Stock> getStockListFromTable(WebDriver webDriver) {
-        return retry(() -> {
+        return retry5timesWith2SecondsDelay(() -> {
             Set<Stock> stocks = new HashSet<>();
             Iterator<WebElement> idElements = webDriver.findElements(By.xpath("//table[@id='table_wrapper-table']/tbody/tr/td[2]/a")).iterator();
             Iterator<WebElement> nameElements = webDriver.findElements(By.xpath("//table[@id='table_wrapper-table']/tbody/tr/td[3]/a")).iterator();
@@ -136,23 +145,23 @@ public class SeleniumStockDataLoader implements StockDataLoader {
         logger.info(String.format("开始读取股票%s价格", stockId));
         String url = environment.getProperty("app.stock-search-url");
         webDriver.get(url);
-        retry(() -> {
+        retry5timesWith2SecondsDelay(() -> {
             WebElement searchInput = webDriver.findElement(By.xpath("//input[@id='suggest01_input']"));
             searchInput.sendKeys(stockId);
             return null;
         });
 
-        String stockUrl = retry(() -> webDriver.findElement(By.xpath(String.format("//a[contains(text(), '%s')]", stockId))).getAttribute("href"));
+        String stockUrl = retry5timesWith2SecondsDelay(() -> webDriver.findElement(By.xpath(String.format("//a[contains(text(), '%s')]", stockId))).getAttribute("href"));
         webDriver.get(stockUrl);
 
-        retry(() -> {
+        retry5timesWith2SecondsDelay(() -> {
             WebElement dayKBtn = webDriver.findElement(By.xpath("//a[contains(text(), '日K')]"));
             dayKBtn.click();
             return null;
         });
 
         if(needAdjustMaOptions) {
-            retry(() -> {
+            retry5timesWith2SecondsDelay(() -> {
                 WebElement ma30Span = webDriver.findElement(By.xpath("//span[contains(text(), 'MA30')]"));
                 ma30Span.click();
                 return null;
@@ -191,31 +200,12 @@ public class SeleniumStockDataLoader implements StockDataLoader {
     }
 
     private float getMaNumber(WebDriver webDriver, String maLabel) {
-        float maNumber = retry(() -> {
+        float maNumber = retry5timesWith2SecondsDelay(() -> {
             WebElement maSpan = webDriver.findElement(By.xpath(String.format("//span[contains(text(), '%s')]", maLabel)));
             String maNumberStr = maSpan.getText();
             return Float.parseFloat(maNumberStr.split(":")[1].trim());
         });
 
         return maNumber;
-    }
-
-    private WebDriver getWebDriver() {
-        ChromeOptions chromeOptions = new ChromeOptions();
-        chromeOptions.addArguments("--no-sandbox");
-        chromeOptions.addArguments("--disable-dev-shm-usage");
-        chromeOptions.addArguments("--headless");
-        WebDriver webDriver = new ChromeDriver(chromeOptions);
-
-        return webDriver;
-    }
-
-    private <TResult> TResult retry(Callable<TResult> callable) {
-        RetryConfig config = new RetryConfigBuilder().withMaxNumberOfTries(5)
-                .withFixedBackoff().withDelayBetweenTries(2, SECONDS)
-                .retryOnSpecificExceptions(RuntimeException.class).build();
-        Status<TResult> result = new CallExecutorBuilder().config(config).build().execute(callable);
-
-        return result.getResult();
     }
 }
