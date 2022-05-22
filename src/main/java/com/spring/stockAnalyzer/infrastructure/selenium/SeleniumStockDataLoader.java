@@ -72,7 +72,12 @@ public class SeleniumStockDataLoader implements StockDataLoader {
             int index = 0;
             for(Stock stock: stocksInEachBucket) {
                 int currentTotalNum = totalNumber.addAndGet(1);
+
                 try {
+                    if(currentTotalNum % 50 == 0) {
+                        logger.info("睡眠1分钟再开始");
+                        Thread.sleep(60000);
+                    }
                     logger.info(String.format("Total No: %d, Web Driver-%d, Internal No: %d: 开始读取股票%s价格",
                             currentTotalNum, currentWebDriverNo,  ++index, stock.getId()));
                     StockPrice price = getStockPrice(stock.getId(), webDriver, needAdjustMaOptions);
