@@ -37,6 +37,7 @@ dependencies {
 	implementation 'io.github.bonigarcia:webdrivermanager:5.1.1'
 	implementation 'com.evanlennick:retry4j:0.15.0'
     implementation 'org.jetbrains:annotations:20.1.0'
+	implementation 'io.github.sevdokimov.logviewer:log-viewer-spring-boot:1.0.3'
     compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'mysql:mysql-connector-java'
 	annotationProcessor 'org.projectlombok:lombok'
